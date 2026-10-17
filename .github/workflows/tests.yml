@@ -1,0 +1,46 @@
+name: API tests
+
+on:
+  push:
+    branches: [main, lab2, "homework-*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Lint
+        run: python -m ruff check .
+      - name: Check formatting
+        run: python -m ruff format --check .
+      - name: Check OpenAPI snapshot
+        run: python -m scripts.export_openapi --check
+      - name: Run API and generated tests
+        run: >-
+          python -m pytest -v --cov=app --cov-report=term-missing
+          --cov-report=xml --junitxml=reports/junit.xml
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-python-${{ matrix.python-version }}
+          path: |
+            reports/junit.xml
+            coverage.xml
+          if-no-files-found: ignore

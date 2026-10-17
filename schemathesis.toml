@@ -1,0 +1,4 @@
+[generation]
+mode = "all"
+max-examples = 25
+deterministic = true
