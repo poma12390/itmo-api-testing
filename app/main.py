@@ -1,7 +1,10 @@
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Path, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response, status
+from fastapi.exception_handlers import http_exception_handler
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Match
 
 
 class TaskInput(BaseModel):
@@ -10,6 +13,15 @@ class TaskInput(BaseModel):
     title: str = Field(min_length=1, max_length=100, pattern=r"\S", examples=["Сдать лабораторную"])
     priority: int = Field(default=3, ge=1, le=5)
     completed: bool = False
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def normalize_integer_number(cls, value: object) -> object:
+        # JSON Schema считает 4 и 4.0 одним целым числом. Строки и bool оставляем
+        # строгой валидации Pydantic, которая вернёт 422.
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return value
 
 
 class Task(TaskInput):
@@ -22,6 +34,7 @@ class Error(BaseModel):
 
 TaskId = Annotated[int, Path(ge=1)]
 NOT_FOUND = {404: {"model": Error, "description": "Task does not exist"}}
+BAD_BODY = {400: {"model": Error, "description": "Request body cannot be decoded"}}
 
 
 def create_app() -> FastAPI:
@@ -33,12 +46,41 @@ def create_app() -> FastAPI:
     tasks: dict[int, Task] = {}
     next_id = 1
 
+    @api.exception_handler(StarletteHTTPException)
+    async def handle_http_error(request: Request, exc: StarletteHTTPException) -> Response:
+        response = await http_exception_handler(request, exc)
+        if exc.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            methods: set[str] = set()
+            for route in api.routes:
+                match, _ = route.matches(request.scope)
+                if match == Match.PARTIAL:
+                    methods.update(getattr(route, "methods", ()))
+            response.headers["Allow"] = ", ".join(sorted(methods))
+        return response
+
     def find_task(task_id: int) -> Task:
         if task_id not in tasks:
             raise HTTPException(status_code=404, detail="Task not found")
         return tasks[task_id]
 
-    @api.post("/tasks", response_model=Task, status_code=status.HTTP_201_CREATED, tags=["tasks"])
+    @api.post(
+        "/tasks",
+        response_model=Task,
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            **BAD_BODY,
+            201: {
+                "headers": {
+                    "Location": {
+                        "description": "Path to the created task",
+                        "required": True,
+                        "schema": {"type": "string", "pattern": r"^/tasks/[1-9][0-9]*$"},
+                    },
+                },
+            },
+        },
+        tags=["tasks"],
+    )
     async def create_task(payload: TaskInput, response: Response) -> Task:
         nonlocal next_id
         task = Task(id=next_id, **payload.model_dump())
@@ -58,7 +100,12 @@ def create_app() -> FastAPI:
     async def get_task(task_id: TaskId) -> Task:
         return find_task(task_id)
 
-    @api.put("/tasks/{task_id}", response_model=Task, responses=NOT_FOUND, tags=["tasks"])
+    @api.put(
+        "/tasks/{task_id}",
+        response_model=Task,
+        responses={**NOT_FOUND, **BAD_BODY},
+        tags=["tasks"],
+    )
     async def replace_task(task_id: TaskId, payload: TaskInput) -> Task:
         find_task(task_id)
         task = Task(id=task_id, **payload.model_dump())

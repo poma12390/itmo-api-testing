@@ -26,6 +26,20 @@ def test_create_task_uses_defaults(client: TestClient) -> None:
     assert response.json() == {"id": 1, "title": "Новая задача", "priority": 3, "completed": False}
 
 
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_integer_valued_json_number_is_accepted(
+    client: TestClient,
+    task: dict,
+    method: str,
+) -> None:
+    url = "/tasks" if method == "post" else f"/tasks/{task['id']}"
+    response = client.request(method, url, json={"title": "Целое число", "priority": 4.0})
+
+    assert response.status_code == (201 if method == "post" else 200)
+    assert response.json()["priority"] == 4
+    assert type(response.json()["priority"]) is int
+
+
 def test_list_tasks_is_initially_empty(client: TestClient) -> None:
     response = client.get("/tasks")
 
@@ -119,6 +133,7 @@ def test_title_and_priority_boundaries(client: TestClient, length: int, priority
         pytest.param({"title": "Задача", "priority": "3"}, "priority", id="string-priority"),
         pytest.param({"title": "Задача", "priority": 2.5}, "priority", id="float-priority"),
         pytest.param({"title": "Задача", "priority": True}, "priority", id="boolean-priority"),
+        pytest.param({"title": "Задача", "priority": None}, "priority", id="null-priority"),
         pytest.param({"title": "Задача", "completed": "false"}, "completed", id="string-boolean"),
         pytest.param({"title": "Задача", "completed": 1}, "completed", id="numeric-boolean"),
         pytest.param({"title": "Задача", "completed": None}, "completed", id="null-boolean"),
@@ -151,6 +166,25 @@ def test_malformed_json_is_rejected(client: TestClient) -> None:
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == "json_invalid"
     assert client.get("/tasks").json() == []
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_invalid_body_encoding_is_rejected_without_side_effects(
+    client: TestClient,
+    task: dict,
+    method: str,
+) -> None:
+    url = "/tasks" if method == "post" else f"/tasks/{task['id']}"
+    response = client.request(
+        method,
+        url,
+        content=b'{"title":"\xff"}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "There was an error parsing the body"}
+    assert client.get("/tasks").json() == [task]
 
 
 @pytest.mark.parametrize("task_id", ["0", "-1", "abc", "1.5"])
@@ -186,3 +220,24 @@ def test_invalid_pagination_is_rejected(client: TestClient, params: dict, field:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["query", field]
+
+
+@pytest.mark.parametrize(
+    ("path", "allowed"),
+    [
+        ("/tasks", {"GET", "POST"}),
+        ("/tasks/1", {"GET", "PUT", "DELETE"}),
+    ],
+)
+def test_unsupported_method_lists_all_allowed_methods(
+    client: TestClient,
+    task: dict,
+    path: str,
+    allowed: set[str],
+) -> None:
+    response = client.patch(path, json={"title": "Не должно сохраниться"})
+
+    assert response.status_code == 405
+    assert response.json() == {"detail": "Method Not Allowed"}
+    assert {method.strip() for method in response.headers["allow"].split(",")} == allowed
+    assert client.get("/tasks").json() == [task]

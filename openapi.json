@@ -32,6 +32,26 @@
                   "$ref": "#/components/schemas/Task"
                 }
               }
+            },
+            "headers": {
+              "Location": {
+                "description": "Path to the created task",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^/tasks/[1-9][0-9]*$"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body cannot be decoded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
             }
           },
           "422": {
@@ -198,6 +218,16 @@
           },
           "404": {
             "description": "Task does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body cannot be decoded",
             "content": {
               "application/json": {
                 "schema": {
